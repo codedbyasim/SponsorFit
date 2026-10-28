@@ -1,0 +1,30 @@
+{
+  "name": "sponsorfit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agentic sponsorship scout powered by Qloo Taste AI.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test lib/score.test.ts lib/qloo/parse.test.ts lib/rate-limit.test.ts lib/agent.test.ts"
+  },
+  "dependencies": {
+    "next": "^15.5.6",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
+    "@types/node": "^22.18.6",
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "eslint": "^9.36.0",
+    "eslint-config-next": "^15.5.6",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
