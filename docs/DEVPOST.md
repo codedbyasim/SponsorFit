@@ -1,0 +1,63 @@
+# SponsorFit — Devpost draft
+
+Working draft for the Qloo Agent Hackathon submission. Trim to the Devpost character limits before pasting.
+
+## Inspiration
+
+Sponsorship conversations still open with the property’s logo and a guess about the room. Chelsea, the Dodgers, a festival, a podcast: the audience already concentrates on some brands and walks past others. We wanted a desk a partnerships lead could put on a screen in a meeting — not another taste quiz, and not a cultural-DNA poster — that starts from that concentration and will not invent a number to make the slide work.
+
+The judges include people who actually buy and sell these partnerships. The demo had to survive “show me Chelsea” and “now put the Dodgers next to them.”
+
+## What it does
+
+You type a public team, creator, artist, or event, or you hit one example. SponsorFit:
+
+1. Resolves the name to a Qloo entity.
+2. Pulls brand affinities for that audience, with explainability when Qloo returns it.
+3. Adds demographics, taste tags, and a cross-domain snapshot (artists, movies, destinations).
+4. Optionally maps activation pockets for the lead brand inside a returned or typed city.
+5. Optionally compares two properties: shared sponsor names from the two insight lists, plus tags from Qloo’s compare endpoint.
+6. Scores each brand with a printed Fit Score.
+7. Writes a short pitch for the top brands. Every figure has to trace to a returned signal or the draft is discarded.
+8. Exports the brief as copy, Markdown, or a one-page printable HTML file.
+
+A badge says **Demo data** or **Live Qloo data**. There is no account. Judges click Chelsea FC and get a board.
+
+## How we built it
+
+Next.js (App Router, TypeScript) on Vercel, one project, free tier. Qloo is called only from a server route. The browser receives a stream of agent cues and the finished board.
+
+The Qloo surface is the hackathon host and the documented parameters: `/search`, `/entities`, `/v2/insights` for `urn:entity:brand`, `urn:demographics`, `urn:tag`, `urn:entity:artist`, `urn:entity:movie`, `urn:entity:destination`, and `urn:heatmap`, plus `/v2/analysis/compare`. `feature.explainability=true` is sent on entity insights. `take` never exceeds 50.
+
+Fit Score is local and explicit: 60% affinity, 25% popularity, 15% cosine alignment of the age-index vectors, with missing terms dropped and the rest renormalized. Pitches go through the AIML API (`gpt-4o-mini`) when a key is present, and through a deterministic template otherwise. A number check rejects model text that is not in the evidence packet.
+
+Demo mode ships four synthetic properties (Chelsea FC, LA Dodgers, Coachella, SmartLess) with fake ids and an on-screen warning. No live Qloo payload is committed. A short in-memory cache and per-visitor rate limit protect the key.
+
+## Challenges
+
+Qloo ignores unsupported parameters instead of erroring, so a “successful” empty body can mean we asked the wrong question. We checked each `filter.type` against the entity parameter guide and the use-case pages (demographics, heatmaps, taste analysis, compare) and we only show a factor when the parser actually found it.
+
+Explainability’s exact JSON shape is described in prose more than in a single schema, so the parser walks the `query.explainability` tree for named scores and otherwise says explainability was not returned.
+
+The key was not available while the app was built. Live parameter behavior — especially whether `feature.explainability=true` is populated for brands, and how compare groups tags — still has to be confirmed against the hackathon host. The UI is built to show absence rather than paper over it.
+
+Keeping an LLM in the loop without letting it invent reach, fees, or cities took a hard gate: if a digit in the draft is not in the evidence set, that pitch is replaced by the template.
+
+## Accomplishments
+
+A judge can run the Chelsea desk, the Dodgers desk, and Chelsea versus the Dodgers with zero configuration. The trace, the formula, the factor bars, the audience indexes, the map, and the pitch cards are all on one page. The same path is covered by tests: scoring math, response parsing, the rate limit, and a full demo scout whose pitches contain no ungrounded numbers.
+
+The product is shaped like a sponsorship desk. The score is a tool for a meeting, with the arithmetic left in the room.
+
+## What we learned
+
+Affinity is a relationship in a graph of audiences, not a probability about a fan. Demographic indexes in the docs are signed deviations, not percents, and they only become an “alignment” after we say so and show the formula. Heatmaps answer “where inside this city is the signal concentrated,” which is a different question from “which city should we activate.” Destinations answer the second one. Mixing those up would have produced fake neighborhood names.
+
+We also learned to treat a missing key as a product state. A labeled sample with a ridiculous-on-purpose brand (Desert Radio FM) is safer than a silent cache of real responses, which the rules forbid anyway.
+
+## What's next
+
+- Confirm explainability, compare grouping, and heatmap locality matching on the live hackathon key, and record what the responses actually changed.
+- Let a buyer pin category exclusions (no beer, no wagering) as `filter.exclude.tags` once those tag ids are resolved from `/v2/tags` rather than guessed.
+- Add a one-page leave-behind that a club’s partnerships team can forward, with the Qloo request ids redacted and the formula still visible.
+- Price nothing. The next step is a better brief, not a checkout.
