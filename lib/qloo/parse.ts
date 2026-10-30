@@ -11,6 +11,7 @@ export type ParsedEntity = {
   affinity: number | null;
   why: WhyChip[];
   catalogTags: string[];
+  isLocality?: boolean;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -108,6 +109,16 @@ export function parseEntities(payload: unknown): ParsedEntity[] {
     if (!id || !name) return [];
     const query = asRecord(record.query);
     const subtype = str(record.subtype) ?? str(record.type) ?? "urn:entity";
+    const properties = asRecord(record.properties);
+    const rawTags = asArray(record.tags).concat(properties ? asArray(properties.tags) : []);
+    const isLocality = Boolean(
+      properties?.place ||
+      rawTags.some((tag) => {
+        const row = asRecord(tag);
+        const tagType = str(row?.type) ?? str(row?.tag_id) ?? "";
+        return tagType.includes("locality");
+      })
+    );
     return [
       {
         id,
@@ -119,6 +130,7 @@ export function parseEntities(payload: unknown): ParsedEntity[] {
         affinity: query ? num(query.affinity) : null,
         why: extractExplainers(query),
         catalogTags: readCatalogTags(record),
+        isLocality,
       },
     ];
   });

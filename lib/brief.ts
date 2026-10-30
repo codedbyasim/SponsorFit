@@ -4,9 +4,7 @@ export function briefMarkdown(result: ScoutResult): string {
   const lines: string[] = [
     `# SponsorFit brief: ${result.property.name}`,
     "",
-    result.source === "demo"
-      ? "Data source: illustrative demo sample. These affinities are not Qloo measurements."
-      : "Data source: live Qloo Taste AI. Affinities describe groups, not individuals.",
+    "Data source: live Qloo Taste AI. Affinities describe groups, not individuals.",
     "",
     "Fit Score = 60% Qloo affinity + 25% Qloo popularity + 15% demographic alignment. Missing factors are dropped and the remaining weights are renormalized. Demographic alignment is the cosine similarity of returned age-index vectors, mapped from -1..1 to 0..100.",
     "",

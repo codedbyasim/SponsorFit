@@ -1,4 +1,4 @@
-export type DataSource = "live" | "demo";
+export type DataSource = "live";
 
 export type StepStatus = "running" | "done" | "skipped" | "error";
 

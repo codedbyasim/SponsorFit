@@ -10,7 +10,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test lib/score.test.ts lib/qloo/parse.test.ts lib/rate-limit.test.ts lib/agent.test.ts"
+    "test": "node --import tsx --test lib/score.test.ts lib/qloo/parse.test.ts lib/rate-limit.test.ts lib/agent.test.ts lib/geo.test.ts"
   },
   "dependencies": {
     "next": "^15.5.6",

@@ -1,7 +1,7 @@
-import { demoCompareTags, findDemoProperty, normalizeName, type DemoProperty } from "./demo/fixtures";
-import { composePitches, pitchIsGrounded, templatePitch, type PitchContext } from "./pitch";
-import { assertPublicQuery, PrivacyError } from "./privacy";
-import { ageLabel, demographicAlignment, fitScore } from "./score";
+import { composePitches, type PitchContext } from "./pitch";
+import { assertPublicQuery } from "./privacy";
+import { focusCluster } from "./geo";
+import { demographicAlignment, fitScore } from "./score";
 import type {
   Activation,
   AudienceProfile,
@@ -37,10 +37,18 @@ import {
 export type Emit = (event: ScoutEvent) => void;
 
 export type ScoutOptions = {
-  forceDemo?: boolean;
   allowLlm?: boolean;
   paceMs?: number;
 };
+
+export function normalizeName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -57,11 +65,6 @@ class Tracer {
   }
 }
 
-async function pace(ms: number | undefined) {
-  if (!ms || ms <= 0) return;
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function emptyAudience(): AudienceProfile {
   return { ages: [], genders: [], tags: [] };
 }
@@ -73,57 +76,6 @@ function rankRows(rows: BrandRow[]): BrandRow[] {
     return (b.affinity ?? -1) - (a.affinity ?? -1);
   });
   return sorted.map((row, index) => ({ ...row, rank: index + 1 }));
-}
-
-function toEntity(property: DemoProperty): ResolvedEntity {
-  return {
-    id: property.id,
-    name: property.name,
-    subtype: property.subtype,
-    disambiguation: property.disambiguation,
-    popularity: property.popularity,
-    description: property.description,
-  };
-}
-
-function audienceFromDemo(property: DemoProperty): AudienceProfile {
-  return {
-    ages: Object.entries(property.ages).map(([key, value]) => ({ key, label: ageLabel(key), value })),
-    genders: Object.entries(property.genders).map(([key, value]) => ({ key, label: key, value })),
-    tags: property.tags,
-  };
-}
-
-function tasteFromDemo(property: DemoProperty): TasteItem[] {
-  const map = (domain: TasteItem["domain"], items: DemoProperty["artists"]): TasteItem[] =>
-    items.map((item) => ({ ...item, domain }));
-  return [...map("artist", property.artists), ...map("movie", property.movies), ...map("destination", property.destinations)];
-}
-
-function rowsFromDemo(property: DemoProperty): BrandRow[] {
-  return rankRows(
-    property.brands.map((brand) => {
-      const demoAlignment = demographicAlignment(property.ages, brand.ages);
-      const scored = fitScore({
-        affinity: brand.affinity,
-        popularity: brand.popularity,
-        demographic: demoAlignment,
-      });
-      return {
-        id: brand.id,
-        name: brand.name,
-        affinity: brand.affinity,
-        popularity: brand.popularity,
-        demoAlignment,
-        fit: scored.fit,
-        formula: scored.formula,
-        factors: scored.factors,
-        why: [{ label: property.name, score: brand.explainScore, source: "illustrative explainability" }],
-        catalogTags: brand.catalogTags,
-        rank: 0,
-      };
-    }),
-  );
 }
 
 function contextsFor(
@@ -196,7 +148,7 @@ function overlap(
   };
 }
 
-function candidateScore(query: string, entity: ParsedEntity): number {
+function candidateScore(query: string, entity: ParsedEntity, searchIndex = 0): number {
   const name = normalizeName(entity.name);
   const wanted = normalizeName(query);
   let score = 0;
@@ -204,10 +156,25 @@ function candidateScore(query: string, entity: ParsedEntity): number {
   else if (name.startsWith(wanted) || wanted.startsWith(name)) score += 70;
   else if (name.includes(wanted) || wanted.includes(name)) score += 46;
   else {
-    const tokens = wanted.split(" ").filter((token) => token.length > 1);
-    const hits = tokens.filter((token) => name.includes(token)).length;
-    score += tokens.length ? (hits / tokens.length) * 36 : 0;
+    const wantedTokens = wanted.split(" ").filter((token) => token.length > 1);
+    const nameTokens = new Set(name.split(" "));
+    const hits = wantedTokens.filter((token) => nameTokens.has(token)).length;
+    score += wantedTokens.length ? (hits / wantedTokens.length) * 36 : 0;
   }
+  // Penalize administrative localities (towns, cities, counties) because Qloo's Taste AI
+  // insights endpoint operates on cultural/sponsorship properties (events, teams, artists, brands),
+  // not municipal boundaries which lack audience interest graphs and return 400.
+  if (entity.isLocality) {
+    score -= 80;
+  }
+  // Penalize names with excessive extra words compared to query
+  const wantedWordCount = wanted.split(" ").filter(Boolean).length;
+  const nameWordCount = name.split(" ").filter(Boolean).length;
+  if (nameWordCount > wantedWordCount) {
+    score -= Math.min(20, (nameWordCount - wantedWordCount) * 3);
+  }
+  // Reward earlier positions from Qloo's relevance-sorted search
+  score += Math.max(0, 30 - searchIndex * 8);
   if (entity.popularity != null) score += Math.min(1, Math.max(0, entity.popularity)) * 8;
   return score;
 }
@@ -233,254 +200,11 @@ export async function runScout(input: ScoutInput, emit: Emit, options: ScoutOpti
   const clean: ScoutInput = { ...input, query, compareQuery, city };
   const allowLlm = options.allowLlm !== false;
 
-  if (options.forceDemo || !qlooConfigured()) {
-    const warning = options.forceDemo
-      ? undefined
-      : "QLOO_API_KEY is not set. This run uses the illustrative sample, not a live Qloo response.";
-    return runDemo(clean, emit, allowLlm, options.paceMs ?? 0, warning);
+  if (!qlooConfigured()) {
+    throw new QlooError("missing_key");
   }
 
-  try {
-    return await runLive(clean, emit, allowLlm);
-  } catch (error) {
-    if (error instanceof PrivacyError) throw error;
-    if (!findDemoProperty(query)) throw error;
-    const reason = error instanceof QlooError ? error.code : "upstream";
-    return runDemo(
-      clean,
-      emit,
-      allowLlm,
-      options.paceMs ?? 0,
-      `Live Qloo request failed (${reason}). Showing the illustrative sample for this property.`,
-    );
-  }
-}
-
-async function runDemo(
-  input: ScoutInput,
-  emit: Emit,
-  allowLlm: boolean,
-  paceMs: number,
-  warning?: string,
-): Promise<ScoutResult> {
-  const tracer = new Tracer(emit);
-  const property = findDemoProperty(input.query);
-  if (!property) {
-    throw new Error(
-      "Demo mode includes Chelsea FC, the LA Dodgers, Coachella, and SmartLess. Connect a Qloo key to scout another public property.",
-    );
-  }
-  const warnings = [
-    "Illustrative sample. Affinities, tags, and map cells are invented for the demo and are not Qloo measurements.",
-  ];
-  if (warning) warnings.unshift(warning);
-
-  tracer.put({
-    id: "resolve",
-    cue: "01",
-    title: "Resolve the property",
-    status: "running",
-    detail: "Matching the name to a labeled demo property. No /search call.",
-    endpoint: "GET /search",
-  });
-  await pace(paceMs);
-  tracer.put({
-    id: "resolve",
-    cue: "01",
-    title: "Resolve the property",
-    status: "done",
-    detail: `Demo entity ${property.name}. ${property.disambiguation}.`,
-    endpoint: "GET /search",
-    params: { query: input.query, take: "8" },
-    resultCount: 1,
-  });
-
-  tracer.put({
-    id: "entity",
-    cue: "02",
-    title: "Hydrate the entity",
-    status: "skipped",
-    detail: "Demo ids are not Qloo UUIDs, so /entities is not called.",
-    endpoint: "GET /entities",
-  });
-
-  const brands = rowsFromDemo(property);
-  tracer.put({
-    id: "brands",
-    cue: "03",
-    title: "Pull brand affinities",
-    status: "done",
-    detail: "Illustrative brand list with sample affinity, popularity, and explainability.",
-    endpoint: "GET /v2/insights",
-    params: {
-      "filter.type": "urn:entity:brand",
-      "signal.interests.entities": property.id,
-      "feature.explainability": "true",
-      take: "20",
-    },
-    resultCount: brands.length,
-  });
-  await pace(paceMs);
-
-  const audience = audienceFromDemo(property);
-  tracer.put({
-    id: "audience",
-    cue: "04",
-    title: "Read the audience profile",
-    status: "done",
-    detail: "Sample age and gender indexes plus taste tags. Indexes are signed, the way Qloo documents them.",
-    endpoint: "GET /v2/insights",
-    params: {
-      "filter.type": "urn:demographics",
-      "signal.interests.entities": property.id,
-    },
-    resultCount: audience.tags.length,
-  });
-  await pace(paceMs);
-
-  const taste = tasteFromDemo(property);
-  tracer.put({
-    id: "taste",
-    cue: "05",
-    title: "Cross-domain taste snapshot",
-    status: "done",
-    detail: "Sample artists, screen titles, and destinations for color. Not a live insights response.",
-    endpoint: "GET /v2/insights",
-    params: { "signal.interests.entities": property.id, take: "6" },
-    resultCount: taste.length,
-  });
-
-  tracer.put({
-    id: "score",
-    cue: "06",
-    title: "Compute Fit Scores",
-    status: "done",
-    detail: "60% affinity, 25% popularity, 15% age-index alignment. Local math on the sample rows.",
-    resultCount: brands.length,
-  });
-  await pace(paceMs);
-
-  const operatorCity = input.city?.trim();
-  const useMap = !operatorCity || normalizeName(operatorCity) === normalizeName(property.heatmapCity);
-  const activation: Activation | null = useMap
-    ? {
-        city: property.heatmapCity,
-        citySource: operatorCity ? "operator" : "destination",
-        brandId: brands[0]?.id ?? property.id,
-        brandName: brands[0]?.name ?? property.name,
-        localityName: property.heatmapCity,
-        cells: [...property.heatmap].sort((a, b) => b.affinity - a.affinity),
-      }
-    : null;
-  tracer.put({
-    id: "map",
-    cue: "07",
-    title: "Activation map",
-    status: activation ? "done" : "skipped",
-    detail: activation
-      ? `Illustrative heatmap cells inside ${activation.city} for ${activation.brandName}.`
-      : `Demo heatmap exists only for ${property.heatmapCity}.`,
-    endpoint: "GET /v2/insights",
-    params: {
-      "filter.type": "urn:heatmap",
-      "filter.location.query": activation?.city ?? operatorCity ?? "",
-      "signal.interests.entities": activation?.brandId ?? "",
-      take: "40",
-    },
-    resultCount: activation?.cells.length ?? 0,
-  });
-
-  let compare: CompareResult | null = null;
-  if (input.compareQuery) {
-    const other = findDemoProperty(input.compareQuery);
-    if (!other || other.id === property.id) {
-      warnings.push("Compare needs a second demo property: Chelsea FC, the LA Dodgers, Coachella, or SmartLess.");
-      tracer.put({
-        id: "compare",
-        cue: "08",
-        title: "Compare audiences",
-        status: "skipped",
-        detail: "The second name is not a separate demo property.",
-        endpoint: "GET /v2/analysis/compare",
-      });
-    } else {
-      const otherRows = rowsFromDemo(other);
-      const tags = demoCompareTags(property.id, other.id);
-      compare = overlap(
-        toEntity(property),
-        toEntity(other),
-        brands,
-        otherRows,
-        tags,
-        tags.length
-          ? "Shared and unique brands come from the two sample affinity lists. Catalog tags for this pair are illustrative labels, not a live compare response."
-          : "Shared and unique brands come from the two sample affinity lists. This pair has no illustrative catalog-compare tags.",
-      );
-      tracer.put({
-        id: "compare",
-        cue: "08",
-        title: "Compare audiences",
-        status: "done",
-        detail: `${compare.sharedBrands.length} brands appear on both sample lists.`,
-        endpoint: "GET /v2/analysis/compare",
-        params: {
-          "a.signal.interests.entities": property.id,
-          "b.signal.interests.entities": other.id,
-        },
-        resultCount: compare.sharedBrands.length,
-      });
-    }
-  } else {
-    tracer.put({
-      id: "compare",
-      cue: "08",
-      title: "Compare audiences",
-      status: "skipped",
-      detail: "Add a second property to compare brand lists.",
-      endpoint: "GET /v2/analysis/compare",
-    });
-  }
-  await pace(paceMs);
-
-  tracer.put({
-    id: "pitch",
-    cue: "09",
-    title: "Write the pitches",
-    status: "running",
-    detail: "Drafting the top of the board from returned signals only.",
-  });
-  const contexts = contextsFor(property.name, brands, audience, taste, activation);
-  const written = await composePitches(contexts, allowLlm);
-  for (const [index, pitch] of written.pitches.entries()) {
-    if (!pitchIsGrounded(pitch, contexts[index])) {
-      written.pitches[index] = templatePitch(contexts[index]);
-    }
-  }
-  tracer.put({
-    id: "pitch",
-    cue: "09",
-    title: "Write the pitches",
-    status: "done",
-    detail: written.detail,
-    resultCount: written.pitches.length,
-  });
-
-  const result: ScoutResult = {
-    source: "demo",
-    property: toEntity(property),
-    alternatives: [],
-    brands,
-    audience,
-    taste,
-    activation,
-    pitches: written.pitches,
-    compare,
-    trace: tracer.steps,
-    warnings,
-    needsConfirmation: false,
-  };
-  emit({ type: "result", result });
-  return result;
+  return await runLive(clean, emit, allowLlm);
 }
 
 async function runLive(input: ScoutInput, emit: Emit, allowLlm: boolean): Promise<ScoutResult> {
@@ -494,19 +218,24 @@ async function runLive(input: ScoutInput, emit: Emit, allowLlm: boolean): Promis
     status: "running",
     detail: "Searching Qloo for a public entity.",
     endpoint: "GET /search",
-    params: { query: input.query, take: "8", sort_by: "match" },
+    params: { query: input.query, take: "5", sort_by: "match" },
   });
   const searched = parseEntities(await searchEntities(input.query));
-  const ranked = searched
-    .map((entity) => ({ entity, score: candidateScore(input.query, entity) }))
-    .sort((a, b) => b.score - a.score);
-  const chosen = input.entityId ? ranked.find((item) => item.entity.id === input.entityId) ?? ranked[0] : ranked[0];
-  if (!chosen || chosen.score < 20) {
-    throw new QlooError("upstream");
+  if (!searched.length) {
+    throw new Error(`No matching entity found on Qloo for "${input.query}". Try a different name.`);
   }
+  const ranked = searched
+    .map((entity, index) => ({ entity, score: candidateScore(input.query, entity, index) }))
+    .sort((a, b) => b.score - a.score);
+  const picked = input.entityId ? ranked.find((item) => item.entity.id === input.entityId) : undefined;
+  const chosen = picked ?? ranked[0];
+  // Nicknames ("Man City") can score low locally even when Qloo's search found the right entity.
+  // In that case let the user confirm from Qloo's own ordering instead of rejecting the query.
+  const weak = !picked && chosen.score < 20;
   const second = ranked.find((item) => item.entity.id !== chosen.entity.id);
   const exact = normalizeName(chosen.entity.name) === normalizeName(input.query);
-  const ambiguous = !input.entityId && !exact && second != null && second.score >= chosen.score - 12 && second.score >= 30;
+  const close = !picked && !exact && second != null && second.score >= chosen.score - 12 && second.score >= 30;
+  const ambiguous = weak || close;
   tracer.put({
     id: "resolve",
     cue: "01",
@@ -516,15 +245,16 @@ async function runLive(input: ScoutInput, emit: Emit, allowLlm: boolean): Promis
       ? `Search returned close matches. Confirm which ${input.query} to scout.`
       : `Selected ${chosen.entity.name}.`,
     endpoint: "GET /search",
-    params: { query: input.query, take: "8", sort_by: "match" },
+    params: { query: input.query, take: "5", sort_by: "match" },
     resultCount: ranked.length,
   });
 
   if (ambiguous) {
+    const options = weak ? searched.slice(0, 4) : ranked.slice(0, 4).map((item) => item.entity);
     const result: ScoutResult = {
       source: "live",
-      property: toResolved(chosen.entity),
-      alternatives: ranked.slice(0, 4).map((item) => toResolved(item.entity)),
+      property: toResolved(options[0]),
+      alternatives: options.map((entity) => toResolved(entity)),
       brands: [],
       audience: emptyAudience(),
       taste: [],
@@ -532,7 +262,11 @@ async function runLive(input: ScoutInput, emit: Emit, allowLlm: boolean): Promis
       pitches: [],
       compare: null,
       trace: tracer.steps,
-      warnings: ["Qloo search returned more than one close match. Pick one to continue."],
+      warnings: [
+        weak
+          ? "Qloo search did not return an exact name match. Pick the entity you meant."
+          : "Qloo search returned more than one close match. Pick one to continue.",
+      ],
       needsConfirmation: true,
     };
     emit({ type: "result", result });
@@ -600,14 +334,26 @@ async function runLive(input: ScoutInput, emit: Emit, allowLlm: boolean): Promis
       take: "20",
     },
   });
-  const brandRaw = await insights({
-    "filter.type": "urn:entity:brand",
-    "signal.interests.entities": signal,
-    "feature.explainability": "true",
-    take: "20",
-  });
+  let brandRaw: unknown;
+  try {
+    brandRaw = await insights({
+      "filter.type": "urn:entity:brand",
+      "signal.interests.entities": signal,
+      "feature.explainability": "true",
+      take: "20",
+    });
+  } catch (error) {
+    if (error instanceof QlooError && error.code === "bad_request") {
+      throw new Error(
+        `Qloo does not have audience insight signals for "${resolved.name}". Please pick or search a sports team, festival, artist, creator, or brand.`,
+      );
+    }
+    throw error;
+  }
   const parsedBrands = parseEntities(brandRaw).filter((brand) => brand.id !== signal);
-  if (!parsedBrands.length) throw new QlooError("upstream");
+  if (!parsedBrands.length) {
+    throw new Error(`No brand affinities returned by Qloo for ${resolved.name}.`);
+  }
   tracer.put({
     id: "brands",
     cue: "03",
@@ -768,25 +514,26 @@ async function runLive(input: ScoutInput, emit: Emit, allowLlm: boolean): Promis
     };
     try {
       const heat = parseHeatmap(await insights(mapParams));
+      const cells = focusCluster(heat.cells);
       activation = {
         city: mapCity,
         citySource: mapSource,
         brandId: focus.id,
         brandName: focus.name,
         localityName: heat.localityName,
-        cells: heat.cells,
+        cells,
       };
       tracer.put({
         id: "map",
         cue: "07",
         title: "Activation map",
-        status: heat.cells.length ? "done" : "skipped",
-        detail: heat.cells.length
-          ? `${heat.cells.length} heatmap cells for ${focus.name} in ${heat.localityName ?? mapCity}.`
+        status: cells.length ? "done" : "skipped",
+        detail: cells.length
+          ? `${cells.length} heatmap cells for ${focus.name} in ${heat.localityName ?? mapCity}.`
           : "Heatmap returned no cells.",
         endpoint: "GET /v2/insights",
         params: mapParams,
-        resultCount: heat.cells.length,
+        resultCount: cells.length,
       });
     } catch {
       warnings.push("Heatmap request failed. Brand ranking is unchanged.");
@@ -807,7 +554,7 @@ async function runLive(input: ScoutInput, emit: Emit, allowLlm: boolean): Promis
     try {
       const otherSearched = parseEntities(await searchEntities(input.compareQuery));
       const otherRanked = otherSearched
-        .map((entity) => ({ entity, score: candidateScore(input.compareQuery ?? "", entity) }))
+        .map((entity, index) => ({ entity, score: candidateScore(input.compareQuery ?? "", entity, index) }))
         .sort((a, b) => b.score - a.score);
       const other =
         (input.compareEntityId ? otherRanked.find((item) => item.entity.id === input.compareEntityId) : undefined) ??

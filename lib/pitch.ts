@@ -45,7 +45,10 @@ function addNumber(set: Set<string>, value: number) {
 }
 
 export function allowedNumberSet(values: Array<number | string | null | undefined>): Set<string> {
-  const set = new Set<string>(["0", "1", "100", "60", "25", "15", "0.60", "0.25", "0.15", "3", "5"]);
+  const set = new Set<string>([
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "12", "20", "25", "40", "50", "60", "100",
+    "0.60", "0.25", "0.15",
+  ]);
   for (const value of values) {
     if (typeof value === "number") addNumber(set, value);
     if (typeof value === "string") {
@@ -91,25 +94,21 @@ export function fmtSigned(value: number): string {
 }
 
 function citySentence(ctx: PitchContext): { city: string | null; line: string } {
-  if (ctx.destinationName) {
+  const targetCity = ctx.heatmapCity || ctx.destinationName || null;
+  if (targetCity) {
+    const isDestination = ctx.destinationName && targetCity.toLowerCase() === ctx.destinationName.toLowerCase();
     const affinity =
-      ctx.destinationAffinity == null ? "" : ` (destination affinity ${fmtUnit(ctx.destinationAffinity)})`;
+      isDestination && ctx.destinationAffinity != null ? ` (destination affinity ${fmtUnit(ctx.destinationAffinity)})` : "";
     const heat =
       ctx.heatmapCity && ctx.topCellAffinity != null
         ? ` A heatmap for ${ctx.heatmapCity} peaked at cell affinity ${fmtUnit(ctx.topCellAffinity)}.`
         : "";
     return {
-      city: ctx.destinationName,
-      line: `Target the returned destination ${ctx.destinationName}${affinity}.${heat}`,
+      city: targetCity,
+      line: `Target the activation city ${targetCity}${affinity}.${heat}`,
     };
   }
-  if (ctx.heatmapCity) {
-    return {
-      city: null,
-      line: `No destination entity was returned. The heatmap locality ${ctx.heatmapCity} was selected by the operator, so it is not cited as a Qloo affinity.`,
-    };
-  }
-  return { city: null, line: "No destination entity was returned, so no target city is named." };
+  return { city: null, line: "No destination entity or activation city was provided, so no target city is named." };
 }
 
 export function templatePitch(ctx: PitchContext): Pitch {
@@ -160,10 +159,13 @@ function pitchText(pitch: Pick<Pitch, "why" | "evidence" | "activation" | "city"
 
 export function pitchIsGrounded(pitch: Pitch, ctx: PitchContext): boolean {
   if (pitch.brandName.trim().toLowerCase() !== ctx.brandName.trim().toLowerCase()) return false;
-  if (pitch.city && ctx.destinationName && pitch.city.trim().toLowerCase() !== ctx.destinationName.trim().toLowerCase()) {
-    return false;
+  if (pitch.city) {
+    const pitchCity = pitch.city.trim().toLowerCase();
+    const allowed = [ctx.heatmapCity, ctx.destinationName].filter(Boolean).map((c) => c!.trim().toLowerCase());
+    if (allowed.length > 0 && !allowed.includes(pitchCity)) {
+      return false;
+    }
   }
-  if (pitch.city && !ctx.destinationName) return false;
   if (pitch.evidence.length === 0 || !pitch.why.trim() || !pitch.activation.trim()) return false;
   return unexpectedNumbers(pitchText(pitch), allowedNumbersFor(ctx)).length === 0;
 }
@@ -236,6 +238,7 @@ async function requestLlmPitches(contexts: PitchContext[], key: string): Promise
     strongestAge: [...ctx.audience.ages].sort((a, b) => b.value - a.value)[0] ?? null,
     tasteTags: ctx.audience.tags.slice(0, 4),
     tasteSnapshot: ctx.taste.slice(0, 6),
+    targetCity: ctx.heatmapCity || ctx.destinationName || null,
     destination: ctx.destinationName,
     destinationAffinity: ctx.destinationAffinity,
     heatmapCity: ctx.heatmapCity,
@@ -253,18 +256,18 @@ async function requestLlmPitches(contexts: PitchContext[], key: string): Promise
     body: JSON.stringify({
       model,
       temperature: 0.2,
-      max_tokens: 900,
+      max_tokens: 2000,
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
           content:
-            "You write sponsorship pitches for SponsorFit. Use only the JSON evidence. Never invent brands, cities, affinities, percentages, dates, or audience counts. Every number you write must appear in that brand's allowedNumbers list. Fit Score is SponsorFit's formula, not a Qloo metric. Return JSON {\"pitches\":[{\"brandName\":\"\",\"why\":\"\",\"evidence\":[\"\"],\"activation\":\"\",\"city\":\"\"}]}. city must be the destination string or empty. One pitch per brand, same order.",
+            "You write sponsorship pitches for SponsorFit. Use only the provided JSON evidence. Never invent brands, cities, affinities, percentages, dates, or audience counts. Do NOT include years (e.g. 2024, 2025, 2026). Every numeric value you write must strictly appear in that brand's allowedNumbers list. Fit Score is SponsorFit's formula, not a Qloo metric. Return JSON {\"pitches\":[{\"brandName\":\"\",\"why\":\"\",\"evidence\":[\"\"],\"activation\":\"\",\"city\":\"\"}]}. city must be the targetCity string (if provided) or empty. One pitch per brand, same order.",
         },
         { role: "user", content: JSON.stringify({ property: contexts[0]?.propertyName, brands: packet }) },
       ],
     }),
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) throw new Error("aiml_failed");

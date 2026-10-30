@@ -21,7 +21,7 @@ You type a public team, creator, artist, or event, or you hit one example. Spons
 7. Writes a short pitch for the top brands. Every figure has to trace to a returned signal or the draft is discarded.
 8. Exports the brief as copy, Markdown, or a one-page printable HTML file.
 
-A badge says **Demo data** or **Live Qloo data**. There is no account. Judges click Chelsea FC and get a board.
+A badge says **Live Qloo data**: every board is built from Qloo responses at request time. There is no account. Judges click Chelsea FC and get a board.
 
 ## How we built it
 
@@ -31,7 +31,7 @@ The Qloo surface is the hackathon host and the documented parameters: `/search`,
 
 Fit Score is local and explicit: 60% affinity, 25% popularity, 15% cosine alignment of the age-index vectors, with missing terms dropped and the rest renormalized. Pitches go through the AIML API (`gpt-4o-mini`) when a key is present, and through a deterministic template otherwise. A number check rejects model text that is not in the evidence packet.
 
-Demo mode ships four synthetic properties (Chelsea FC, LA Dodgers, Coachella, SmartLess) with fake ids and an on-screen warning. No live Qloo payload is committed. A short in-memory cache and per-visitor rate limit protect the key.
+There is no demo mode and no bundled sample: every board comes from the live hackathon API, and no Qloo payload is committed. When a typed name is ambiguous or only loosely matches Qloo’s top hit, the desk asks the user to pick from Qloo’s own search results. A short in-memory cache, a per-visitor rate limit, and a per-instance call budget protect the key.
 
 ## Challenges
 
@@ -39,13 +39,13 @@ Qloo ignores unsupported parameters instead of erroring, so a “successful” e
 
 Explainability’s exact JSON shape is described in prose more than in a single schema, so the parser walks the `query.explainability` tree for named scores and otherwise says explainability was not returned.
 
-The key was not available while the app was built. Live parameter behavior — especially whether `feature.explainability=true` is populated for brands, and how compare groups tags — still has to be confirmed against the hackathon host. The UI is built to show absence rather than paper over it.
+Search responses are heavy: each hit carries its full tag tree, so asking for eight hits returned about 2 MB and took over 20 seconds. We cut search to five hits, raised the upstream timeout, and stopped retrying after a timeout so one slow call cannot blow the route’s time limit. We only show explainability, compare tags, and other optional signals when the parser actually finds them.
 
 Keeping an LLM in the loop without letting it invent reach, fees, or cities took a hard gate: if a digit in the draft is not in the evidence set, that pitch is replaced by the template.
 
 ## Accomplishments
 
-A judge can run the Chelsea desk, the Dodgers desk, and Chelsea versus the Dodgers with zero configuration. The trace, the formula, the factor bars, the audience indexes, the map, and the pitch cards are all on one page. The same path is covered by tests: scoring math, response parsing, the rate limit, and a full demo scout whose pitches contain no ungrounded numbers.
+A judge can run the Chelsea desk, the Dodgers desk, and Chelsea versus the Dodgers against live Qloo data with one click. The trace, the formula, the factor bars, the audience indexes, the map, and the pitch cards are all on one page. Tests cover scoring math, response parsing, the rate limit, query privacy checks, and the number check that rejects ungrounded pitch text.
 
 The product is shaped like a sponsorship desk. The score is a tool for a meeting, with the arithmetic left in the room.
 
@@ -53,7 +53,7 @@ The product is shaped like a sponsorship desk. The score is a tool for a meeting
 
 Affinity is a relationship in a graph of audiences, not a probability about a fan. Demographic indexes in the docs are signed deviations, not percents, and they only become an “alignment” after we say so and show the formula. Heatmaps answer “where inside this city is the signal concentrated,” which is a different question from “which city should we activate.” Destinations answer the second one. Mixing those up would have produced fake neighborhood names.
 
-We also learned to treat a missing key as a product state. A labeled sample with a ridiculous-on-purpose brand (Desert Radio FM) is safer than a silent cache of real responses, which the rules forbid anyway.
+We also learned that a successful live call is not the same as a fast one. Payload size, not request count, was the bottleneck, and a timeout should fail fast rather than retry into the route limit.
 
 ## What's next
 

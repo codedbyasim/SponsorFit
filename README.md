@@ -16,7 +16,7 @@ Every live call is a server-side GET against `https://hackathon.api.qloo.com` (o
 
 | Step | Endpoint | Parameters | Why |
 | --- | --- | --- | --- |
-| Resolve the name | `GET /search` | `query`, `take=8`, `sort_by=match` | Turn “Chelsea FC” into a Qloo entity id. Search `take` is documented up to 100; this app stays at or under 50. |
+| Resolve the name | `GET /search` | `query`, `take=5`, `sort_by=match` | Turn “Chelsea FC” into a Qloo entity id. Search hits carry full tag trees (roughly 250 KB each), so `take` stays small to keep the response fast. |
 | Hydrate the hit | `GET /entities` | `entity_ids` | Used when the id is a UUID, so the brief can show the entity record rather than the search snippet alone. |
 | Brand affinities | `GET /v2/insights` | `filter.type=urn:entity:brand`, `signal.interests.entities`, `feature.explainability=true`, `take=20` | The sponsor list. Explainability is requested because the insights reference attaches per-result reasons when it can be computed. Brand insights list `signal.interests.entities` as a supported signal. |
 | Audience demographics | `GET /v2/insights` | `filter.type=urn:demographics`, `signal.interests.entities` | Signed age and gender indexes for the property, matching the demographics use case. The same call is repeated for the shortlisted brands so alignment is a comparison of returned vectors. |
@@ -25,7 +25,7 @@ Every live call is a server-side GET against `https://hackathon.api.qloo.com` (o
 | Activation map | `GET /v2/insights` | `filter.type=urn:heatmap`, `filter.location.query`, `signal.interests.entities` (the lead brand), `take=40` | Heatmap use case: a locality plus one interest signal. Cells expose affinity, affinity rank, and popularity. The app plots cells; it does not invent neighborhood names. |
 | Compare two properties | `GET /v2/analysis/compare` | `a.signal.interests.entities`, `b.signal.interests.entities` | Both parameters are required. SponsorFit also overlaps the two brand-insight lists. Those are different measurements, and the UI says so. |
 
-`/v2/insights` calls that do not depend on each other run in parallel. Optional calls (tags, cross-domain, heatmap, compare) fail soft. If brand insights themselves fail, or the key is missing, a known demo property falls back to the labeled sample.
+`/v2/insights` calls that do not depend on each other run in parallel. Optional calls (tags, cross-domain, heatmap, compare) fail soft. If search or brand insights fail, the run stops with an error message. There is no sample fallback.
 
 ## Agent architecture
 
@@ -88,7 +88,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). With an empty `.env.local` the four example buttons run immediately.
+Open [http://localhost:3000](http://localhost:3000). `QLOO_API_KEY` is required; without it every scout returns a `missing_key` error.
 
 ```sh
 npm test
@@ -103,7 +103,7 @@ See `.env.example`. Names only live in git.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `QLOO_API_KEY` | For live data | Hackathon key. Server only. Header `X-Api-Key`. |
+| `QLOO_API_KEY` | Yes | Hackathon key. Server only. Header `X-Api-Key`. |
 | `QLOO_BASE_URL` | No | Defaults to `https://hackathon.api.qloo.com`. Must be `https`. |
 | `AIML_API_KEY` | No | AIML key for phrasing pitches. |
 | `AIML_MODEL` | No | Defaults to `gpt-4o-mini`. |
@@ -123,22 +123,13 @@ Environment variables on the Vercel project, for Production and Preview:
 
 Do not mark the Qloo or AIML keys as `NEXT_PUBLIC_*`. The browser only talks to `/api/scout`.
 
-## Demo mode
+## Live data only
 
-If `QLOO_API_KEY` is missing, or a live call fails for a property the sample knows, the scout uses an obvious synthetic fixture:
+Every result comes from the Qloo hackathon API at request time. There is no demo mode and no bundled sample data. The badge always reads **Live Qloo data**. No Qloo response is stored in this repo; the hackathon rules forbid that.
 
-- Chelsea FC
-- LA Dodgers
-- Coachella
-- SmartLess (creator / podcast)
+If a name matches more than one entity, or Qloo’s top hit does not closely match the typed name (nicknames such as “Man City”), the desk shows a **Which entity?** picker built from Qloo’s own search results instead of guessing.
 
-The badge reads **Demo data**. Every warning states that the affinities are invented. Entity ids look like `demo-entity-chelsea-fc`, not Qloo UUIDs. Coachella’s list includes the made-up brand Desert Radio FM so the sample cannot be mistaken for a cached API payload. No live Qloo response is stored in this repo. The hackathon rules forbid that.
-
-Other names, including Taylor Swift, need a live key. Demo mode refuses them instead of borrowing another property’s numbers.
-
-Chelsea versus the Dodgers is a one-click compare. In the sample, Nike, American Express, Samsung, and Uber land on both lists; Guinness and EA Sports stay with Chelsea; Sony, Toyota, and Modelo stay with the Dodgers. Catalog-compare tags for that pair are labeled illustrative.
-
-An in-memory cache (10 minutes, 100 entries) and a limit of 8 scouts a minute per visitor, plus 30 upstream Qloo calls a minute per instance, keep a public demo from burning the key. Fluid Compute instances do not share that memory. That is intentional: the cache is a cushion, not a dataset.
+An in-memory cache (10 minutes, 100 entries), a limit of 8 scouts a minute per visitor, and 120 upstream Qloo calls a minute per instance protect the key. A single scout with compare makes about 20 Qloo calls; cache hits do not count against the budget. Upstream calls time out after 30 seconds. Fluid Compute instances do not share that memory. That is intentional: the cache is a cushion, not a dataset.
 
 ## Privacy
 

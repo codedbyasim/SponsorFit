@@ -233,9 +233,9 @@ export function ScoutDesk() {
         {result ? (
           <div className="banner">
             <div>
-              <span className={result.source === "demo" ? "badge demo" : "badge live"}>
+              <span className="badge live">
                 <i />
-                {result.source === "demo" ? "Demo data" : "Live Qloo data"}
+                Live Qloo data
               </span>
               <ul className="warnings">
                 {result.warnings.map((warning) => (
@@ -346,8 +346,7 @@ export function ScoutDesk() {
                 <h2 id="board">Empty desk</h2>
               </div>
               <p className="formula">
-                Judges can open Chelsea FC or the LA Dodgers with one click. Without a Qloo key the same four
-                properties run on a labeled sample. Nothing here is a cached live response.
+                Search any sports club, music artist, festival, podcast, or public property to scout live brand affinities powered by Qloo Taste AI and AI-grounded pitch formulation.
               </p>
             </section>
           ) : null}

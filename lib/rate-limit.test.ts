@@ -15,6 +15,6 @@ test("per-visitor scout limit trips on the ninth request in a window", () => {
 test("global Qloo budget is separate from the visitor limit", () => {
   resetLimits();
   const now = 1_700_000_000_000;
-  for (let i = 0; i < 30; i += 1) assert.equal(allowQlooCall(now), true);
+  for (let i = 0; i < 120; i += 1) assert.equal(allowQlooCall(now), true);
   assert.equal(allowQlooCall(now), false);
 });

@@ -3,7 +3,8 @@ type Bucket = { tokens: number; updated: number };
 const buckets = new Map<string, Bucket>();
 const WINDOW_MS = 60_000;
 const IP_LIMIT = 8;
-const GLOBAL_LIMIT = 30;
+// One live scout with compare makes ~20 Qloo calls; the hackathon key allows 10/s and 50k/month.
+const GLOBAL_LIMIT = 120;
 
 function take(mapKey: string, limit: number, now: number): boolean {
   const bucket = buckets.get(mapKey) ?? { tokens: limit, updated: now };

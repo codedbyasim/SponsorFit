@@ -33,7 +33,6 @@ function sleep(ms: number): Promise<void> {
 export async function qlooGet(path: string, params: Record<string, string>): Promise<unknown> {
   const key = process.env.QLOO_API_KEY?.trim();
   if (!key) throw new QlooError("missing_key");
-  if (!allowQlooCall()) throw new QlooError("budget");
 
   const clean: Record<string, string> = {};
   for (const [name, value] of Object.entries(params)) {
@@ -50,6 +49,8 @@ export async function qlooGet(path: string, params: Record<string, string>): Pro
     console.info(JSON.stringify({ msg: "qloo", path, cache: "hit" }));
     return hit;
   }
+  // Budget is checked only for real upstream calls; cache hits are free.
+  if (!allowQlooCall()) throw new QlooError("budget");
 
   const url = new URL(path, baseUrl());
   for (const [name, value] of Object.entries(clean)) url.searchParams.set(name, value);
@@ -61,7 +62,8 @@ export async function qlooGet(path: string, params: Record<string, string>): Pro
       const response = await fetch(url, {
         headers: { Accept: "application/json", "X-Api-Key": key },
         cache: "no-store",
-        signal: AbortSignal.timeout(12_000),
+        // /search bodies are large (full tag trees per hit), so allow slow downloads.
+        signal: AbortSignal.timeout(30_000),
       });
       lastStatus = response.status;
       console.info(JSON.stringify({ msg: "qloo", path, status: response.status, ms: Date.now() - started, attempt }));
@@ -83,7 +85,8 @@ export async function qlooGet(path: string, params: Record<string, string>): Pro
       return data;
     } catch (error) {
       if (error instanceof QlooError) throw error;
-      if (attempt === 0) {
+      const timedOut = error instanceof Error && error.name === "TimeoutError";
+      if (attempt === 0 && !timedOut) {
         await sleep(400);
         continue;
       }
@@ -95,7 +98,7 @@ export async function qlooGet(path: string, params: Record<string, string>): Pro
 }
 
 export function searchEntities(query: string): Promise<unknown> {
-  return qlooGet("/search", { query, take: "8", sort_by: "match" });
+  return qlooGet("/search", { query, take: "5", sort_by: "match" });
 }
 
 export function getEntity(id: string): Promise<unknown> {

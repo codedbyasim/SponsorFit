@@ -1,3 +1,7 @@
+"use client";
+
+import { useState } from "react";
+import { cellSizeLabel, formatCoord, mapsAreaUrl } from "@/lib/geo";
 import type { Activation, AudienceProfile, BrandRow, CompareResult, HeatCell, Pitch, TasteItem, TraceStep } from "@/lib/types";
 
 export function unit(value: number | null | undefined): string {
@@ -221,65 +225,160 @@ export function AudiencePanel({ audience, taste }: { audience: AudienceProfile; 
 
 export function ActivationPanel({ activation }: { activation: Activation | null }) {
   return (
-    <section className="panel">
+    <section className="panel activation-panel">
       <div className="panel-head">
         <h2>Activation map</h2>
-        <p className="kicker">{activation ? `${activation.brandName} · ${activation.city}` : "No map"}</p>
+        <div className="activation-head-right">
+          <p className="kicker">{activation ? `${activation.brandName} · ${activation.city}` : "No map"}</p>
+          {activation ? (
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(activation.brandName + " " + activation.city)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="city-map-btn"
+              title={`Search ${activation.brandName} in ${activation.city} on Google Maps`}
+            >
+              🗺️ Open {activation.city} Map ↗
+            </a>
+          ) : null}
+        </div>
       </div>
       <div style={{ padding: "8px 14px 14px" }}>
         {activation && activation.cells.length ? (
           <>
             <p className="note">
               {activation.citySource === "operator"
-                ? `${activation.city} was typed in as the heatmap locality.`
-                : `${activation.city} is the top returned destination.`}
+                ? `${activation.city} was entered as your target activation city.`
+                : `${activation.city} is the top travel destination returned by Qloo for this audience.`}
               {activation.localityName && activation.localityName !== activation.city
-                ? ` Qloo matched the locality ${activation.localityName}.`
+                ? ` (Qloo matched locality: ${activation.localityName}).`
                 : ""}{" "}
-              Cells are pockets inside that locality, not extra cities.
+              Each dot is a grid square, not a street address: the centre of an area where {activation.brandName} fans concentrate. A square can include parks, water, or open land, so open it on the map and look around the area before choosing a venue.
             </p>
-            <Heatmap cells={activation.cells} />
-            <ol className="cell-list">
-              {activation.cells.slice(0, 4).map((cell) => (
-                <li key={cell.geohash ?? `${cell.lat},${cell.lng}`}>
-                  <span>{cell.geohash ?? `${cell.lat.toFixed(2)}, ${cell.lng.toFixed(2)}`}</span>
-                  <span className="num">affinity {unit(cell.affinity)}</span>
-                </li>
-              ))}
-            </ol>
+
+            <div className="heat-legend">
+              <span><i className="legend-dot high" /> Top Density Hotspots (&gt;95% match)</span>
+              <span><i className="legend-dot med" /> High Footfall Zones (80% - 95%)</span>
+            </div>
+
+            <Heatmap cells={activation.cells} city={activation.city} brandName={activation.brandName} />
+
+            <h3 className="kicker" style={{ marginTop: 14 }}>Top Campaign Hotspots in {activation.city}</h3>
+            <div className="hotspot-cards">
+              {activation.cells.slice(0, 4).map((cell, idx) => {
+                const pct = ((cell.affinity ?? 0) * 100).toFixed(0);
+                const mapsUrl = mapsAreaUrl(cell.lat, cell.lng, cell.geohash);
+                return (
+                  <div key={cell.geohash ?? `${cell.lat},${cell.lng}`} className="hotspot-card">
+                    <div className="hotspot-left">
+                      <span className="hotspot-badge">#{idx + 1} Zone</span>
+                      <div>
+                        <strong className="hotspot-coords">
+                          {formatCoord(cell.lat, cell.lng)}
+                          {cell.geohash ? <span className="geohash-tag">Geohash: {cell.geohash}</span> : null}
+                        </strong>
+                        <span className="hotspot-sub">Centre of a {cellSizeLabel(cell.geohash)} with concentrated {activation.brandName} fans</span>
+                      </div>
+                    </div>
+                    <div className="hotspot-actions">
+                      <span className="hotspot-affinity-val">{pct}% Affinity</span>
+                      <a
+                        href={mapsUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="map-link-btn"
+                        title="Open exact coordinates on Google Maps"
+                      >
+                        📍 View area ↗
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </>
         ) : (
-          <p className="note">No heatmap cells for this run. Enter a city such as London or Los Angeles, or rely on a returned destination.</p>
+          <p className="note">No heatmap cells for this run. Enter a city such as London, New York, or Lahore, or rely on a returned destination.</p>
         )}
       </div>
     </section>
   );
 }
 
-function Heatmap({ cells }: { cells: HeatCell[] }) {
+function Heatmap({ cells, city, brandName }: { cells: HeatCell[]; city: string; brandName: string }) {
+  const [selectedCell, setSelectedCell] = useState<HeatCell | null>(cells[0] ?? null);
   const lats = cells.map((cell) => cell.lat);
   const lngs = cells.map((cell) => cell.lng);
   const minLat = Math.min(...lats);
   const maxLat = Math.max(...lats);
   const minLng = Math.min(...lngs);
   const maxLng = Math.max(...lngs);
-  const latSpan = maxLat - minLat || 1;
-  const lngSpan = maxLng - minLng || 1;
+  const latSpan = maxLat - minLat || 0.01;
+  const lngSpan = maxLng - minLng || 0.01;
+
   return (
-    <div className="heat" role="img" aria-label="Returned heatmap cells plotted by latitude and longitude">
-      {cells.map((cell) => {
-        const x = ((cell.lng - minLng) / lngSpan) * 76 + 12;
-        const y = (1 - (cell.lat - minLat) / latSpan) * 76 + 12;
-        const affinity = cell.affinity ?? 0.4;
-        const size = 12 + Math.max(0, Math.min(1, affinity)) * 18;
-        return (
-          <span
-            key={cell.geohash ?? `${cell.lat}-${cell.lng}`}
-            className="dot"
-            style={{ left: `${x}%`, top: `${y}%`, width: size, height: size, opacity: 0.45 + affinity * 0.5 }}
-          />
-        );
-      })}
+    <div className="heat-container">
+      <div className="heat" role="img" aria-label="Returned heatmap cells plotted by latitude and longitude">
+        <div className="compass-n">N</div>
+        <div className="compass-s">S</div>
+        <div className="compass-w">W</div>
+        <div className="compass-e">E</div>
+        <div className="city-watermark">{city}</div>
+
+        {cells.map((cell, idx) => {
+          const x = ((cell.lng - minLng) / lngSpan) * 76 + 12;
+          const y = (1 - (cell.lat - minLat) / latSpan) * 76 + 12;
+          const affinity = cell.affinity ?? 0.4;
+          const size = 14 + Math.max(0, Math.min(1, affinity)) * 18;
+          const isSelected = selectedCell?.geohash === cell.geohash || (selectedCell?.lat === cell.lat && selectedCell?.lng === cell.lng);
+
+          return (
+            <button
+              type="button"
+              key={cell.geohash ?? `${cell.lat}-${cell.lng}`}
+              className={`dot ${isSelected ? "is-active" : ""}`}
+              style={{
+                left: `${x}%`,
+                top: `${y}%`,
+                width: size,
+                height: size,
+                opacity: 0.55 + affinity * 0.45,
+              }}
+              onClick={() => setSelectedCell(cell)}
+              onMouseEnter={() => setSelectedCell(cell)}
+              title={`Zone #${idx + 1}: ${cell.geohash ?? `${cell.lat.toFixed(3)}, ${cell.lng.toFixed(3)}`} (${((cell.affinity ?? 0) * 100).toFixed(0)}% affinity)`}
+              aria-label={`Hotspot ${idx + 1}`}
+            />
+          );
+        })}
+      </div>
+
+      {selectedCell ? (
+        <div className="active-cell-callout">
+          <div className="callout-header">
+            <span className="callout-pin">📍</span>
+            <div>
+              <strong>
+                Hotspot {selectedCell.geohash ? `"${selectedCell.geohash}"` : ""} ({formatCoord(selectedCell.lat, selectedCell.lng, 4)})
+              </strong>
+              <small>Centre of a {cellSizeLabel(selectedCell.geohash)} with concentrated {brandName} fans in {city}</small>
+            </div>
+          </div>
+          <div className="callout-right">
+            <span className="callout-affinity">
+              {((selectedCell.affinity ?? 0) * 100).toFixed(0)}% match
+            </span>
+            <a
+              href={mapsAreaUrl(selectedCell.lat, selectedCell.lng, selectedCell.geohash)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="map-link-btn"
+            >
+              View area on Google Maps ↗
+            </a>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

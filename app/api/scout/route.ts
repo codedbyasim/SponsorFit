@@ -1,5 +1,4 @@
 import { runScout, type Emit } from "@/lib/agent";
-import { qlooConfigured } from "@/lib/qloo/client";
 import { allowRequest } from "@/lib/rate-limit";
 import type { ScoutInput } from "@/lib/types";
 
@@ -11,7 +10,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function cleanId(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
-  if (UUID_RE.test(trimmed) || /^demo-entity-[a-z0-9-]{3,48}$/.test(trimmed)) return trimmed;
+  if (UUID_RE.test(trimmed)) return trimmed;
   return undefined;
 }
 
@@ -51,7 +50,7 @@ export async function POST(request: Request) {
             city: payload.city ? String(payload.city) : undefined,
           },
           send,
-          { paceMs: qlooConfigured() ? 0 : 110 },
+          { paceMs: 0 },
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : "Scout failed.";
